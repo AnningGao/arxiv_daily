@@ -1,39 +1,52 @@
 #!/usr/bin/env python3
 """
-arxiv_pull.py — Pull the latest arXiv papers for a given set of categories.
+arxiv_pull.py — Pull papers from arXiv's latest daily announcement for a given
+set of categories.
 
 Scope: this script ONLY fetches papers. It does no filtering, ranking, or
 digesting — that is left to a downstream step (e.g. handing metadata.json to
 Claude). It can pull any subset of metadata fields (title, authors, abstract,
 ...) and optionally download the raw full text as the .tex source archive.
 
-Talks to the arXiv API (https://info.arxiv.org/help/api/) directly using only
-the Python standard library (urllib + xml.etree) — no third-party packages.
-We handle result paging, the arXiv API rate limit (one request / 3s), and
-retries ourselves. A single throttle spaces both the API queries and the .tex
-source downloads, so the 3s rule is respected across all requests together.
+Papers are selected by ANNOUNCEMENT date — i.e. when a paper actually appears
+in arXiv's daily listing — NOT by submission date. The arXiv query API only
+knows submission dates, so selection instead uses arXiv's daily RSS
+announcement feed (https://rss.arxiv.org/rss/<category>): it covers the most
+recent announcement and tags each paper as new / cross / replace. Full metadata
+for the selected papers is then fetched from the arXiv API by id, so the output
+keeps abstracts, authors, the .tex source, etc. The feed only carries the most
+recent announcement, so this is meant for a once-a-day run (no date ranges).
+
+Uses only the Python standard library (urllib + xml.etree) — no third-party
+packages. We handle the arXiv API rate limit (one request / 3s) and retries
+ourselves; a single throttle spaces the feed fetch, the API queries, and the
+.tex downloads so the 3s rule holds across all requests together.
 
 Environment: any Python 3.9+ interpreter works; no dependencies to install.
     python arxiv_pull.py ...
 
 Examples
 --------
-# Latest 1 day in the default categories, metadata only (title/authors/abstract):
+# Latest announcement in the default categories, metadata only:
 python arxiv_pull.py
 
-# Last 2 days in two categories, all metadata, download .tex source:
-python arxiv_pull.py --categories astro-ph.CO astro-ph.IM \
-    --days 2 --fields all --fulltext tex
+# Latest announcement in two categories, all metadata, download .tex source:
+python arxiv_pull.py --categories astro-ph.CO astro-ph.IM --fields all --fulltext tex
+
+# Only genuinely new submissions (exclude cross-lists):
+python arxiv_pull.py --announce-types new
 
 # Specific papers by id, only titles + abstracts:
-python arxiv_pull.py --ids 2401.12345 1706.03762v1 \
-    --fields title abstract
+python arxiv_pull.py --ids 2401.12345 1706.03762v1 --fields title abstract
 
 Output
 ------
 <out>/                          (default: ./arxiv_pull_<YYYY-MM-DD>)
   metadata.json                 query info + list of papers (selected fields)
   source/<id>.tar.gz|.gz        raw .tex source archive (only if --fulltext tex)
+
+In announcement mode each paper also carries `announce_type` (new/cross/replace)
+and `announced` (the announcement datetime), so you can tell how it appeared.
 """
 
 from __future__ import annotations
@@ -57,16 +70,17 @@ import xml.etree.ElementTree as ET
 
 # arXiv asks clients to make no more than one request every 3 seconds over a
 # single connection. That limit is shared across all of arXiv's endpoints, so
-# both the API queries and our source downloads use the same minimum interval.
-# https://info.arxiv.org/help/api/tou.html
+# the feed fetch, the API queries and our source downloads all use the same
+# minimum interval. https://info.arxiv.org/help/api/tou.html
 API_URL = "http://export.arxiv.org/api/query"
-USER_AGENT = "arxiv_pull/2.0 (personal daily paper puller; contact: local user)"
+RSS_URL = "https://rss.arxiv.org/rss/{category}"   # daily announcement feed
+USER_AGENT = "arxiv_pull/3.0 (personal daily paper puller; contact: local user)"
 MIN_REQUEST_INTERVAL = 3.0   # min seconds between requests (arXiv ToU)
 NUM_RETRIES = 5              # retries for API queries and downloads
 MAX_RETRY_WAIT = 120.0       # cap on how long we'll honor a Retry-After / backoff
 _last_request_time = 0.0     # monotonic timestamp of the last arXiv request
 
-# Atom / arXiv / OpenSearch XML namespaces used in the API response.
+# Atom / arXiv / OpenSearch XML namespaces used in the API + RSS responses.
 ATOM_NS = "{http://www.w3.org/2005/Atom}"
 ARXIV_NS = "{http://arxiv.org/schemas/atom}"
 OPENSEARCH_NS = "{http://a9.com/-/spec/opensearch/1.1/}"
@@ -81,8 +95,15 @@ OPENSEARCH_NS = "{http://a9.com/-/spec/opensearch/1.1/}"
 # Full list: https://arxiv.org/category_taxonomy
 DEFAULT_CATEGORIES = ["astro-ph.CO", "astro-ph.IM", "astro-ph.GA"]
 
+# How a paper appeared in the daily announcement.
+#   new      originally submitted to one of the requested categories
+#   cross    cross-listed into a requested category from elsewhere
+#   replace  a revised version of an older paper, re-announced
+ANNOUNCE_TYPES = ["new", "cross", "replace"]
+
 # Optional metadata fields the user may choose to include in metadata.json.
 # id, abs_url and pdf_url are ALWAYS included so the output is self-contained.
+# (published/updated are SUBMISSION dates; `announced` carries the appearance.)
 OPTIONAL_FIELDS = [
     "title",
     "authors",
@@ -96,16 +117,13 @@ OPTIONAL_FIELDS = [
     "updated",
 ]
 
-# arXiv API sortBy values; the CLI uses these strings verbatim.
-SORT_CHOICES = ["submittedDate", "lastUpdatedDate"]
-
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
 # --------------------------------------------------------------------------- #
-# Rate limiting (shared by API queries and source downloads)
+# Rate limiting (shared by the feed fetch, API queries and source downloads)
 # --------------------------------------------------------------------------- #
 
 def _throttle(min_interval: float) -> None:
@@ -177,8 +195,8 @@ class Result:
                      for a in entry.findall(f"{ATOM_NS}author")],
             summary=entry.findtext(f"{ATOM_NS}summary") or "",
             primary_category=pc.get("term") if pc is not None else None,
-            categories=[c.get("term") for c in entry.findall(f"{ATOM_NS}category")
-                        if c.get("term")],
+            categories=[term for c in entry.findall(f"{ATOM_NS}category")
+                        if (term := c.get("term"))],
             comment=entry.findtext(f"{ARXIV_NS}comment"),
             doi=entry.findtext(f"{ARXIV_NS}doi"),
             journal_ref=entry.findtext(f"{ARXIV_NS}journal_ref"),
@@ -197,31 +215,22 @@ class Result:
 
 
 class Search:
-    """An arXiv API query, by category search or by explicit id list."""
+    """An arXiv API query for an explicit list of ids."""
 
-    def __init__(self, query: str = "", id_list: list[str] | None = None,
-                 max_results: int | None = None,
-                 sort_by: str = "submittedDate",
-                 sort_order: str = "descending") -> None:
-        self.query = query
-        self.id_list = id_list or []
-        self.max_results = max_results
-        self.sort_by = sort_by
-        self.sort_order = sort_order
+    def __init__(self, id_list: list[str]) -> None:
+        self.id_list = list(id_list)
+        self.max_results = None  # bounded by len(id_list) via totalResults
 
     def params(self, start: int, page_size: int) -> dict:
-        p: dict[str, object] = {"start": start, "max_results": page_size}
-        if self.id_list:
-            p["id_list"] = ",".join(self.id_list)
-        if self.query:
-            p["search_query"] = self.query
-            p["sortBy"] = self.sort_by
-            p["sortOrder"] = self.sort_order
-        return p
+        return {
+            "start": start,
+            "max_results": page_size,
+            "id_list": ",".join(self.id_list),
+        }
 
 
 class Client:
-    """Pages through arXiv API results, pacing and retrying requests for us."""
+    """Fetches URLs and pages through arXiv API results, pacing + retrying."""
 
     def __init__(self, page_size: int, delay_seconds: float,
                  num_retries: int = NUM_RETRIES) -> None:
@@ -229,8 +238,8 @@ class Client:
         self.delay_seconds = delay_seconds
         self.num_retries = num_retries
 
-    def _get(self, params: dict) -> bytes:
-        url = API_URL + "?" + urllib.parse.urlencode(params)
+    def get_url(self, url: str) -> bytes:
+        """GET a URL with the shared throttle + retry on 429/503/network errors."""
         last_err: Exception | None = None
         for attempt in range(1, self.num_retries + 1):
             _throttle(self.delay_seconds)
@@ -247,7 +256,7 @@ class Client:
                     else:
                         wait = min(MAX_RETRY_WAIT,
                                    self.delay_seconds * (2 ** attempt))
-                    log(f"  API HTTP {err.code} (attempt {attempt}/"
+                    log(f"  HTTP {err.code} (attempt {attempt}/"
                         f"{self.num_retries}); waiting {wait:.0f}s")
                     time.sleep(wait)
                     continue
@@ -255,13 +264,16 @@ class Client:
                 last_err = err
                 if attempt < self.num_retries:
                     wait = min(MAX_RETRY_WAIT, self.delay_seconds * (2 ** attempt))
-                    log(f"  API request failed (attempt {attempt}/"
-                        f"{self.num_retries}): {err.reason}; retrying in {wait:.0f}s")
+                    log(f"  request failed (attempt {attempt}/{self.num_retries}): "
+                        f"{err.reason}; retrying in {wait:.0f}s")
                     time.sleep(wait)
                     continue
         raise RuntimeError(
-            f"arXiv API request failed after {self.num_retries} attempts: {url}"
+            f"request failed after {self.num_retries} attempts: {url}"
         ) from last_err
+
+    def _get(self, params: dict) -> bytes:
+        return self.get_url(API_URL + "?" + urllib.parse.urlencode(params))
 
     def results(self, search: Search):
         """Yield Results, paging through the API until exhausted/capped."""
@@ -291,56 +303,82 @@ class Client:
                 return
 
 
-# --------------------------------------------------------------------------- #
-# Search
-# --------------------------------------------------------------------------- #
-
 def make_client(page_size: int, delay_seconds: float,
                 num_retries: int = NUM_RETRIES) -> Client:
-    """A Client that paces + retries API requests for us."""
+    """A Client that paces + retries requests for us."""
     return Client(page_size=page_size, delay_seconds=delay_seconds,
                   num_retries=num_retries)
 
 
-def build_search_query(categories: list[str]) -> str:
-    """Build the arXiv `search_query` for a set of categories (OR-joined)."""
-    return " OR ".join(f"cat:{c}" for c in categories)
+# --------------------------------------------------------------------------- #
+# Selection
+# --------------------------------------------------------------------------- #
+
+def _bare_id(short_id: str) -> str:
+    """Strip a trailing version (v1, v2, ...) from an arXiv short id."""
+    return re.sub(r"v\d+$", "", short_id)
 
 
-def search_by_categories(client: Client, categories: list[str],
-                         days: int | None, max_results: int,
-                         sort_by: str) -> list[Result]:
+def _id_from_link(link: str) -> str:
+    """Extract the bare arXiv id from an abstract-page URL."""
+    return _bare_id(link.rsplit("/abs/", 1)[-1].strip())
+
+
+def _parse_rss_date(text: str | None) -> str | None:
+    """Parse an RSS pubDate (RFC 822) to an ISO-8601 string."""
+    if not text:
+        return None
+    parsed = email.utils.parsedate_to_datetime(text)
+    return parsed.isoformat() if parsed else None
+
+
+def fetch_announced(client: Client, categories: list[str],
+                    announce_types: list[str], max_results: int
+                    ) -> tuple[list[Result], dict[str, dict[str, str | None]]]:
     """
-    Stream newest-first results in the given categories, keeping papers until we
-    hit `max_results` or — when `days` is set — cross the submission cutoff.
+    Select papers from each category's latest daily announcement (RSS feed),
+    keep the chosen announce types, then fetch full metadata via the API by id.
+
+    Returns (results, announced) where `announced` maps bare arXiv id ->
+    {"announce_type": str, "announced": iso-datetime}.
     """
-    cutoff = None
-    if days is not None:
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
-        log(f"Cutoff: keeping papers submitted on/after {cutoff.isoformat()}")
+    announced: dict[str, dict[str, str | None]] = {}
+    order: list[str] = []
+    for cat in categories:
+        log(f"Announcement feed: {cat}")
+        url = RSS_URL.format(category=urllib.parse.quote(cat))
+        channel = ET.fromstring(client.get_url(url)).find("channel")
+        if channel is None:
+            log(f"  no <channel> in feed for {cat}; skipping")
+            continue
+        for item in channel.findall("item"):
+            atype = (item.findtext(f"{ARXIV_NS}announce_type") or "").strip()
+            if atype not in announce_types:
+                continue
+            link = item.findtext("link") or ""
+            if "/abs/" not in link:
+                continue
+            bid = _id_from_link(link)
+            if bid in announced:
+                continue
+            announced[bid] = {
+                "announce_type": atype,
+                "announced": _parse_rss_date(item.findtext("pubDate")),
+            }
+            order.append(bid)
 
-    search = Search(
-        query=build_search_query(categories),
-        max_results=max_results,
-        sort_by=sort_by,
-        sort_order="descending",
-    )
-
-    results: list[Result] = []
-    for result in client.results(search):
-        if cutoff is not None and result.published is not None \
-                and result.published < cutoff:
-            log("Reached cutoff date; stopping.")
-            break  # results are newest-first, so everything after is older
-        results.append(result)
-        if len(results) >= max_results:
-            break
-    return results
+    ids = order[:max_results]
+    capped = f" (capped to {len(ids)})" if len(ids) < len(order) else ""
+    log(f"{len(order)} paper(s) in latest announcement{capped}; "
+        f"types kept: {', '.join(announce_types)}")
+    if not ids:
+        return [], announced
+    return fetch_by_ids(client, ids), announced
 
 
 def fetch_by_ids(client: Client, ids: list[str]) -> list[Result]:
     """Fetch specific papers by arXiv id (bare, versioned, or old-style)."""
-    log(f"Fetching {len(ids)} paper(s) by id ...")
+    log(f"Fetching metadata for {len(ids)} paper(s) by id ...")
     results = list(client.results(Search(id_list=ids)))
     if len(results) < len(ids):
         log(f"Warning: requested {len(ids)} id(s) but the API returned "
@@ -363,10 +401,12 @@ def _safe_id(result: Result) -> str:
 
 
 def result_to_dict(result: Result, fields: list[str],
-                   files: dict[str, str] | None = None) -> dict:
+                   files: dict[str, str] | None = None,
+                   extra: dict[str, str | None] | None = None) -> dict:
     """Serialize a Result, including only the chosen optional fields.
 
     id, abs_url and pdf_url are always present so the entry is self-contained.
+    `extra` (e.g. announce_type/announced) is merged in right after them.
     """
     values = {
         "title": _clean(result.title),
@@ -385,6 +425,8 @@ def result_to_dict(result: Result, fields: list[str],
         "abs_url": result.entry_id,
         "pdf_url": result.pdf_url,
     }
+    if extra:
+        out.update(extra)
     for f in fields:
         out[f] = values[f]
     if files:
@@ -486,22 +528,25 @@ def resolve_fields(requested: list[str]) -> list[str]:
 
 
 def write_metadata(results: list[Result], fields: list[str],
-                   files: dict[str, dict[str, str]], args: argparse.Namespace,
-                   out_dir: str) -> str:
+                   files: dict[str, dict[str, str]],
+                   announced: dict[str, dict[str, str | None]],
+                   args: argparse.Namespace, out_dir: str) -> str:
     os.makedirs(out_dir, exist_ok=True)
     by_ids = bool(args.ids)
     payload = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "mode": "id_list" if by_ids else "category_search",
+        "mode": "id_list" if by_ids else "announcement",
         "ids": args.ids if by_ids else None,
         "categories": None if by_ids else args.categories,
-        "days": None if by_ids else args.days,
-        "sort_by": None if by_ids else args.sort,
+        "announce_types": None if by_ids else args.announce_types,
         "fields": fields,
         "fulltext": args.fulltext,
         "count": len(results),
         "papers": [
-            result_to_dict(r, fields, files.get(r.get_short_id()))
+            result_to_dict(
+                r, fields, files.get(r.get_short_id()),
+                extra=announced.get(_bare_id(r.get_short_id())),
+            )
             for r in results
         ],
     }
@@ -517,41 +562,42 @@ def write_metadata(results: list[Result], fields: list[str],
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Pull the latest arXiv papers for chosen categories.",
+        description="Pull papers from arXiv's latest daily announcement.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
         "--ids", "-i", nargs="+", default=None, metavar="ARXIV_ID",
         help="Fetch specific papers by arXiv id (e.g. 2401.12345 2402.06789v2). "
-             "Overrides category search; --days/--sort/--max-results are ignored.",
+             "Overrides announcement selection; --categories/--announce-types "
+             "are ignored.",
     )
     p.add_argument(
         "--categories", "-c", nargs="+", default=DEFAULT_CATEGORIES,
-        help="arXiv categories to pull (OR-joined), e.g. astro-ph.CO astro-ph.IM.",
+        help="arXiv categories whose latest announcement to pull, "
+             "e.g. astro-ph.CO astro-ph.IM.",
     )
     p.add_argument(
-        "--days", "-d", type=int, default=1,
-        help="Keep papers submitted within this many days. Use 0 for no date "
-             "limit (then --max-results is the only cap).",
+        "--announce-types", nargs="+", choices=ANNOUNCE_TYPES,
+        default=["new", "cross"], metavar="TYPE",
+        help="Which announcement types to keep: new (originally submitted to a "
+             "requested category), cross (cross-listed in), replace (revised "
+             "re-announcement). Choices: " + ", ".join(ANNOUNCE_TYPES) + ".",
     )
     p.add_argument(
-        "--max-results", "-n", type=int, default=200,
-        help="Hard cap on number of papers fetched.",
+        "--max-results", "-n", type=int, default=400,
+        help="Hard cap on number of papers kept from the announcement.",
     )
     p.add_argument(
         "--fields", "-f", nargs="+", default=["title", "authors", "abstract"],
         metavar="FIELD",
         help="Optional metadata fields to include, or 'all'. Choices: "
              + ", ".join(OPTIONAL_FIELDS)
-             + ". (id, abs_url, pdf_url are always included.)",
+             + ". (id, abs_url, pdf_url always included; announcement mode also "
+             "adds announce_type and announced.)",
     )
     p.add_argument(
         "--fulltext", choices=["none", "tex"], default="none",
         help="Download the raw .tex source archive (tex) or nothing (none).",
-    )
-    p.add_argument(
-        "--sort", choices=list(SORT_CHOICES), default="submittedDate",
-        help="Order results by original submission or by last update.",
     )
     p.add_argument(
         "--page-size", type=int, default=100,
@@ -563,8 +609,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--min-interval", type=float, default=MIN_REQUEST_INTERVAL,
-        help="Minimum seconds between arXiv requests (API delay + download "
-             "spacing). arXiv's limit is one request per 3s; raise if you hit 429.",
+        help="Minimum seconds between arXiv requests (feed + API + downloads). "
+             "arXiv's limit is one request per 3s; raise if you hit 429.",
     )
     return p.parse_args(argv)
 
@@ -572,29 +618,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     fields = resolve_fields(args.fields)
-    days = None if args.days == 0 else args.days
     out_dir = args.out or os.path.join(
         os.getcwd(), f"arxiv_pull_{dt.date.today().isoformat()}"
     )
 
     if args.ids:
-        log(f"IDs        : {', '.join(args.ids)}")
+        log(f"IDs           : {', '.join(args.ids)}")
     else:
-        log(f"Categories : {', '.join(args.categories)}")
-    log(f"Fields     : {', '.join(fields)}")
-    log(f"Full text  : {args.fulltext}")
-    log(f"Output dir : {out_dir}")
+        log(f"Categories    : {', '.join(args.categories)}")
+        log(f"Announce types: {', '.join(args.announce_types)}")
+    log(f"Fields        : {', '.join(fields)}")
+    log(f"Full text     : {args.fulltext}")
+    log(f"Output dir    : {out_dir}")
 
     client = make_client(page_size=args.page_size, delay_seconds=args.min_interval)
+    announced: dict[str, dict[str, str | None]] = {}
     if args.ids:
         results = fetch_by_ids(client, args.ids)
     else:
-        results = search_by_categories(
+        results, announced = fetch_announced(
             client=client,
             categories=args.categories,
-            days=days,
+            announce_types=args.announce_types,
             max_results=args.max_results,
-            sort_by=args.sort,
         )
     log(f"Found {len(results)} paper(s).")
 
@@ -602,7 +648,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.fulltext != "none" and results:
         files = fetch_fulltext(results, args.fulltext, out_dir, args.min_interval)
 
-    meta_path = write_metadata(results, fields, files, args, out_dir)
+    meta_path = write_metadata(results, fields, files, announced, args, out_dir)
     log(f"Wrote metadata for {len(results)} paper(s) -> {meta_path}")
     return 0
 
