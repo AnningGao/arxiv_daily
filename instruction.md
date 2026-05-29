@@ -27,6 +27,7 @@ is needed. Invoke it as:
 ## Files and directory layout
 
 - arxiv_pull.py : my arXiv fetcher script (do not modify)
+- instruction.md : instruction for Claude (do not modify) 
 - interests/ : directory of interest files, named YYYY.MM.md
   (e.g., 2026.05.md). I maintain these manually — do not create,
   modify, or delete files in this directory.
