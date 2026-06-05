@@ -27,6 +27,9 @@ is needed. Invoke it as:
 
 - arxiv_pull.py : my arXiv fetcher script (do not modify)
 - instruction.md : instruction for Claude (do not modify)
+- digest_template.md : the canonical format for the daily digest. Read
+  it before writing the output in Step 6 and follow its structure
+  literally. Do not modify it.
 - interests/ : directory of interest files, named YYYY.MM.md
   (e.g., 2026.05.md). I maintain these manually — do not create,
   modify, or delete files in this directory.
@@ -266,30 +269,46 @@ Verification before moving to Step 6:
 
 Create YYYY-MM/YYYY-MM-DD.md (e.g., 2026-05/2026-05-25.md).
 
-Header section:
-- Date
+Read digest_template.md first and follow it EXACTLY — it is the
+canonical format. Match its title line, header lines, tier headings,
+and per-paper layout verbatim, substituting real values for every
+{placeholder} and deleting the template's guidance comments. The notes
+below summarize what the template requires; if anything here seems to
+conflict with the template, the template wins.
+
+Header section (standalone bold lines, per the template):
+- Title: `# arXiv Digest — YYYY-MM-DD`
 - Interest file used (note if it was a fallback from a prior month)
-- Counts: papers scanned, after first filter, final selected
-- Brief note if minimum of 5 was relaxed and why
+- Categories pulled
+- Papers scanned (with the astro-ph vs. extras breakdown)
+- After first filter (candidates reviewed with full text)
+- Final selected (papers across N tiers)
+- Optional italic `*Note: ...*` line for caveats: minimum of 5 relaxed
+  and why, an empty tier, API fallbacks, dropped papers, etc. Omit it
+  when there is nothing to flag.
 
 Body: one section per tier that has any papers, in this order:
 - ## Tier 1 — Highly relevant
 - ## Tier 2 — Adjacent / useful context
 - ## Tier 3 — Outside my area but notable
-- ## Tier 4 — Meta-research
+- ## Tier 4 — Meta-research about the field
 
 Skip a tier's section entirely if it has no papers.
 
-For each paper:
+For each paper (exactly the template's shape):
 - ### Title (with arXiv link via abs_url from metadata.json)
-- Authors (first 3, then "et al." if more)
-- Primary arXiv category (helps me see at a glance which sub-field
-  this comes from, since the all-astro-ph pull spans many)
+- Authors (first 3, then "et al." if more); optionally flag an
+  interest-file high-value co-author in a parenthetical
+- `**Primary category:** <primary_category>` line, with `| also: <cat>`
+  if there is a relevant cross-listing
 - 3-4 sentence summary of the actual contribution
-- 1-2 sentences on why it's in this tier (especially important for
-  Tiers 2-4, where the connection isn't obvious)
+- A plain relevance paragraph (1-2 sentences) on why it's in this tier
+  — NOT a bold "Why Tier N" label — especially important for Tiers 2-4
+  where the connection isn't obvious
 - Inline references to extracted figures using relative paths:
   ![](figures/{arxiv_id}/<filename>)
+- If a paper warrants no figure, a closing italic note explaining why,
+  e.g. `*No figures extracted for {arxiv_id} (...).*`
 
 ### Step 7: Clean up, audit, then commit and push to claude/digests
 
