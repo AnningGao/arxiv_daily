@@ -1,4 +1,3 @@
-
 You are running a daily arXiv recommendation routine in Anthropic's
 cloud, against a clone of my arxiv-daily repo. Work in the cloned
 repo's root; all paths below are relative to it unless absolute.
@@ -27,7 +26,7 @@ is needed. Invoke it as:
 ## Files and directory layout
 
 - arxiv_pull.py : my arXiv fetcher script (do not modify)
-- instruction.md : instruction for Claude (do not modify) 
+- instruction.md : instruction for Claude (do not modify)
 - interests/ : directory of interest files, named YYYY.MM.md
   (e.g., 2026.05.md). I maintain these manually — do not create,
   modify, or delete files in this directory.
@@ -89,8 +88,7 @@ interest file's categories section contains TWO groups:
        astro-ph.SR  (Solar and Stellar Astrophysics)
 
   2. Additional non-astro-ph categories I've flagged in the interest
-     file (e.g., cs.LG for ML-in-astronomy crossovers, gr-qc for
-     gravitational waves, hep-ph for particle astrophysics, etc.).
+     file (e.g., cs.LG for ML-in-astronomy crossovers).
      The set varies depending on what I'm working on.
 
 The first-pass pull (Step 2) uses the UNION of these two groups. The
@@ -119,14 +117,26 @@ plus extras typically returns several hundred papers, well above the
 default cap. 500 is a reasonable ceiling; raise it if you ever see the
 pull hit the cap.
 
-If --days 1 returns zero papers, it is likely a weekend or holiday
-(arXiv does not post on weekends). In that case, retry with --days 2,
-then --days 3, then --days 4, stopping as soon as you get a reasonable
-batch of papers. Note in the summary which --days value you used and
-why.
+If the total number of papers exceeds the arXiv API rate limit, fetch
+multiple times to make sure you have all the papers. If the rate limit
+problem persists, make sure that you AT LEAST have all the astro-ph
+papers (typically <100).
 
-Read scratch/pass1/metadata.json. Filter against the interest file
-using only title + abstract + authors + categories.
+Read scratch/pass1/metadata.json. For first-pass filtering:
+
+- Read the FULL abstract for every paper. Do NOT truncate, summarize,
+  or apply length cuts to abstracts. The full abstract is the cheapest
+  reliable signal for filtering — truncation loses the result
+  statement, which is usually at the end. Do NOT, however, fetch any
+  additional information beyond title + authors + abstract +
+  primary_category + categories. That is what scratch/pass1/metadata.json
+  contains and it is sufficient.
+- Filter against the interest file using these fields only.
+
+Token-saving rule: do not re-fetch the same paper, do not load the
+LaTeX source, and do not visit arxiv.org for any paper at this stage.
+Full text is for the SECOND pass only (Step 3), after candidates are
+selected.
 
 The candidate count target is bigger because the input pool is larger:
 aim for ~25-40 candidates for deeper review. Be generous — exclude
@@ -140,9 +150,9 @@ it might also matter. A galaxies paper cross-listed to astro-ph.IM
 is often interesting for methods reasons even if galaxies isn't my
 focus.
 
-If the pull genuinely returns zero papers even after extending --days,
-write a recommendation file noting "no new papers in target categories",
-clean up scratch/, commit and push per Step 7, and exit cleanly.
+If the pull genuinely returns zero papers, write a recommendation
+file noting "no new papers in target categories", clean up scratch/,
+commit and push per Step 7, and exit cleanly.
 
 ### Step 3: Second-pass pull (full text for survivors)
 
@@ -203,16 +213,54 @@ Selection rules:
 - Quality over quantity always wins. Be honest and direct — your job
   is to save me time, not to fill a quota.
 
-### Step 5: Extract figures
+This step produces the FINAL paper list for the digest. Step 5 (figure
+extraction) operates only on this final list — not on the broader
+candidate pool from Step 3.
 
-For each selected paper, work from its extracted LaTeX source directory:
+### Step 5: Extract figures (only for papers in the final digest)
 
-- Identify up to 2 important figures. Look for \includegraphics
-  references in Methods, Results, or central concept sections. Avoid
-  title-page logos, decorative figures, or appendix-only figures.
-- Copy them to YYYY-MM/figures/{arxiv_id}/
-- Figures may be .pdf, .png, .jpg, or .eps. Copy as-is; do not convert.
-- 0 figures is acceptable. Do not invent or substitute.
+CRITICAL ORDERING: Step 4 already produced the final list of papers
+that will appear in the digest. Figures are extracted ONLY for papers
+on that final list, and ONLY if they will actually be referenced in
+the markdown. No speculative extraction.
+
+For each paper that WILL appear in the digest (and only those):
+
+1. Decide first whether you want to include a figure for this paper
+   at all. A figure is worth including only if it materially helps
+   me understand the paper at a glance (a key result plot, an
+   architecture diagram, a central concept illustration). If a paper
+   is fully understandable from the text summary alone, include zero
+   figures. Most papers should have 0-1 figures; 2 is the cap, not
+   the target.
+
+2. If you decide a figure is warranted, identify the specific figure
+   from the LaTeX source. Look for \includegraphics references in
+   Methods, Results, or central concept sections. Avoid title-page
+   logos, decorative figures, and appendix-only figures.
+
+3. ONLY THEN copy the figure file to YYYY-MM/figures/{arxiv_id}/.
+   Copy as-is — figures may be .pdf, .png, .jpg, or .eps; do not
+   convert.
+
+4. Immediately record the markdown reference you will use for this
+   figure (e.g., ![](figures/2605.23114/figure_results.png)). You
+   will paste this into the digest in Step 6.
+
+Forbidden patterns:
+- Do NOT extract figures for papers that did not make the final cut
+  in Step 4.
+- Do NOT extract figures "just in case" you might use them later.
+- Do NOT extract a figure and then decide not to reference it in
+  the markdown. If you extracted it, it must appear in the digest.
+- Do NOT leave orphaned figure files in YYYY-MM/figures/{arxiv_id}/
+  that aren't referenced from the markdown.
+
+Verification before moving to Step 6:
+- List every file under YYYY-MM/figures/ that you created in this
+  run. For each one, confirm it corresponds to a paper in the final
+  selection AND will be referenced in the markdown you're about to
+  write. Delete any that don't satisfy both conditions.
 
 ### Step 6: Write the recommendation file
 
@@ -222,7 +270,6 @@ Header section:
 - Date
 - Interest file used (note if it was a fallback from a prior month)
 - Counts: papers scanned, after first filter, final selected
-- --days value used for the pull, if not 1
 - Brief note if minimum of 5 was relaxed and why
 
 Body: one section per tier that has any papers, in this order:
@@ -244,7 +291,7 @@ For each paper:
 - Inline references to extracted figures using relative paths:
   ![](figures/{arxiv_id}/<filename>)
 
-### Step 7: Clean up, then commit and push to claude/digests
+### Step 7: Clean up, audit, then commit and push to claude/digests
 
 First, delete the entire scratch/ directory and any temporary
 extraction directories you created during Step 3. The only files that
@@ -254,6 +301,21 @@ Do NOT touch the interests/ directory under any circumstances. I
 maintain those files manually.
 
 Verify the cleanup with `ls scratch/` returning nothing.
+
+Then run a figure audit before staging anything:
+
+1. Grep the digest markdown for figure references:
+       grep -oE 'figures/[^)]+' YYYY-MM/YYYY-MM-DD.md
+2. List all figure files actually on disk under this month:
+       find YYYY-MM/figures -type f
+3. Every file in (2) must appear in (1). If a file is on disk but
+   NOT referenced in the markdown, DELETE it before staging:
+       rm <unreferenced-file>
+4. Every reference in (1) must point to a file in (2). If a
+   reference points to a missing file, fix the markdown (either
+   remove the reference or restore the figure).
+
+Only after this audit passes, run the git commands below.
 
 Now commit and push. Use the SINGLE persistent branch claude/digests.
 Run these commands EXACTLY, substituting the real date only in the
@@ -295,13 +357,14 @@ Rules for this step:
 - Counts at each filter stage and tier breakdown
 - Path to the recommendation file
 - Interest file used, and whether it was a fallback from a prior month
+- Number of figures extracted and number referenced (should be equal)
 - Any errors, skipped papers, or quota deviations
 
 ## General guidelines
 
 - The commit branch is ALWAYS claude/digests. This is not negotiable
   and overrides any instinct to create per-run branches.
-- Quality over quantity, always. 10 honest picks beats 20 padded ones. But always recommend me with no less than 10 papers.
+- Quality over quantity, always. 10 honest picks beats 20 padded ones.
 - Be direct in summaries. No hedging, no marketing language.
 - Do not hallucinate paper IDs, authors, or summaries. metadata.json
   is the source of truth for what was actually fetched.
@@ -311,4 +374,11 @@ Rules for this step:
   single gzipped file, use `gunzip` instead.
 - The interests/ directory is read-only for this routine. Never create,
   edit, or delete files there.
-
+- Figures are extracted ONLY for papers in the final digest, and ONLY
+  if they will be referenced in the markdown. Extracted-but-unused
+  figures are a bug. The audit in Step 7 enforces this — but the goal
+  is to never extract unused figures in the first place, not to clean
+  them up at the end.
+- First-pass filtering uses the FULL abstract — never truncate. But
+  do not fetch any additional context (full text, web pages) until
+  candidates are selected for the second pass.
