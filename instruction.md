@@ -37,6 +37,12 @@ is needed. Invoke it as:
   Contains the daily digest .md files and a figures/ subdirectory.
 - YYYY-MM/figures/{arxiv_id}/ : extracted figures for each recommended
   paper, organized by arXiv ID
+- web/ : the static GitHub Pages website that renders the digests
+  (build script + HTML/CSS/JS). Repo infrastructure, NOT a routine
+  output — do not modify or delete it.
+- .github/workflows/pages.yml : GitHub Actions workflow that rebuilds
+  and republishes the website on every push to claude/digests. Do not
+  modify or delete it.
 - scratch/ : temporary working area for daily pulls. Everything in here
   is deleted at the end of each run.
 
@@ -44,7 +50,10 @@ The only persistent outputs of this routine are:
 - the daily digest markdown files at YYYY-MM/YYYY-MM-DD.md
 - the figures at YYYY-MM/figures/{arxiv_id}/...
 
-Everything else gets cleaned up.
+Everything you CREATE beyond these gets cleaned up (scratch/ and any
+temporary extraction directories). "Cleanup" means deleting your own
+temporary working files only — never pre-existing repo files such as
+web/ or .github/. Leave the website infrastructure untouched.
 
 ## How the fetcher works (read before running)
 
@@ -313,8 +322,11 @@ For each paper (exactly the template's shape):
 ### Step 7: Clean up, audit, then commit and push to claude/digests
 
 First, delete the entire scratch/ directory and any temporary
-extraction directories you created during Step 3. The only files that
-should remain are the digest markdown and figures under YYYY-MM/.
+extraction directories you created during Step 3. Cleanup removes ONLY
+the temporary files you created this run — leave every pre-existing repo
+file in place, including the website under web/ and the workflow under
+.github/. After cleanup, the only NEW files from this run should be the
+digest markdown and figures under YYYY-MM/.
 
 Do NOT touch the interests/ directory under any circumstances. I
 maintain those files manually.
@@ -369,6 +381,11 @@ Rules for this step:
 - If the push fails because the remote branch advanced (non-fast-
   forward), run `git fetch origin claude/digests` then
   `git rebase origin/claude/digests` and push again. Do not force-push.
+- The push to claude/digests automatically triggers the GitHub Pages
+  workflow (.github/workflows/pages.yml), which rebuilds and republishes
+  the website. No extra action is needed — the new digest appears on the
+  site a few minutes after the push. The `git add` above stages only the
+  digest outputs, so the website files are never re-committed by a run.
 
 ### Step 8: Print a summary to stdout
 
