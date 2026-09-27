@@ -17,6 +17,21 @@ let searchIndex = [];
 let flatDays = []; // [{date, month, title, path}] newest-first
 
 // ---------------------------------------------------------------------------
+// Strikethrough: GFM in marked also strikes text between SINGLE tildes, so
+// "~10 cMpc ... ~5 Mpc" (tilde = "approximately") rendered as struck-through
+// text. Only accept the standard double-tilde form ~~text~~.
+// ---------------------------------------------------------------------------
+marked.use({
+  tokenizer: {
+    del(src) {
+      const m = /^~~(?=[^\s~])([\s\S]*?[^\s~])~~(?!~)/.exec(src);
+      if (m) return { type: "del", raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+      return undefined; // not false: false would fall back to the default tokenizer
+    },
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Math protection: pull $$...$$ and $...$ out before marked runs so it can't
 // mangle _ / * inside formulas, then restore the spans afterwards.
 // ---------------------------------------------------------------------------
