@@ -256,8 +256,10 @@ For each paper that WILL appear in the digest (and only those):
    convert.
 
 4. Immediately record the markdown reference you will use for this
-   figure (e.g., ![](figures/2605.23114/figure_results.png)). You
-   will paste this into the digest in Step 6.
+   figure (e.g., ![](figures/2605.23114/figure_results.png)), together
+   with a note on what the figure is meant to show, taken from its
+   \caption{} and the text that discusses it while the source is still
+   open. You will turn this into the figure's caption in Step 6.
 
 Forbidden patterns:
 - Do NOT extract figures for papers that did not make the final cut
@@ -332,6 +334,14 @@ For each paper (exactly the template's shape):
   $**T_0**$).
 - Inline references to extracted figures using relative paths:
   ![](figures/{arxiv_id}/<filename>)
+- Directly below each figure (blank line in between), a brief italic
+  caption, 1-2 sentences: `*<caption>*`. Say what the figure is meant to
+  tell the reader, not just what is plotted. "Recovered T₀ tracks the
+  input across z = 2-4, with bias under 2%" is useful; "T₀ versus
+  redshift" is not. Name the axes or panels only where that is needed to
+  read the takeaway. Base the caption on the paper's own \caption{} and
+  the text discussing the figure, and don't describe features you
+  haven't verified there. With two figures, each gets its own caption.
 - If a paper warrants no figure, simply omit the figure line. Never add
   a note explaining that no figure was extracted.
 

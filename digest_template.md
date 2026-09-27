@@ -10,6 +10,8 @@ TEMPLATE NOTES (delete this comment block in the real digest):
   Only reference figures actually extracted to disk for this paper, and
   never extract a figure you won't reference (see Step 5/7). If a paper
   warrants no figure, just omit the figure line — say nothing about it.
+- Every figure gets an italic caption paragraph directly below it (blank
+  line in between). With two figures, each has its own caption.
 - Authors: list the first 3, then "et al." if there are more. Add a
   parenthetical to flag interest-file high-value co-authors when useful.
 - Link the title to abs_url from metadata.json — do not fabricate IDs.
@@ -36,6 +38,8 @@ the headline result. Draw on the full-text reading from the second pass.}
 
 ![](figures/{arxiv_id}/{filename})
 
+*{1-2 sentence caption: what this figure shows and the takeaway it is meant to deliver.}*
+
 ---
 
 ## Tier 2 — Adjacent / useful context
@@ -48,6 +52,8 @@ the headline result. Draw on the full-text reading from the second pass.}
 {3-4 sentence summary of the actual contribution.}
 
 ![](figures/{arxiv_id}/{filename})
+
+*{1-2 sentence caption: what this figure shows and the takeaway it is meant to deliver.}*
 
 ---
 
@@ -62,6 +68,8 @@ the headline result. Draw on the full-text reading from the second pass.}
 tier — the result has to be genuinely groundbreaking or surprising.}
 
 ![](figures/{arxiv_id}/{filename})
+
+*{1-2 sentence caption: what this figure shows and the takeaway it is meant to deliver.}*
 
 ---
 
