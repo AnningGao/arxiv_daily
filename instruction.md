@@ -315,6 +315,21 @@ For each paper (exactly the template's shape):
   entry: do NOT add a relevance paragraph, a "Why Tier N" line, or any
   other note on why the paper was selected — the tier already says it.
   Work anything essential about the connection into the summary itself.
+- Within that summary, **bold** the few words that carry the paper, so
+  I can get the gist by skimming only the bold text. Good targets:
+  - the physical quantity or parameter the paper measures or
+    constrains (e.g. **the IGM temperature at mean density T₀**)
+  - the headline number, with its uncertainty or significance
+    (e.g. **σ₈ = 0.79 ± 0.02**, **a 3.2σ detection**)
+  - a short phrase naming the technical path (e.g. **simulation-based
+    inference with a neural density estimator on the 1D flux power**)
+  - occasionally, the single sentence stating the main conclusion
+  Bold words that are already in the summary: do not add a new
+  sentence, paragraph, or label (no "**Key result:**") just to hold the
+  emphasis. Keep it sparing, about 2-4 bold spans per paper; if half
+  the summary is bold, nothing stands out. Put the `**` outside any
+  `$...$` math, never inside it (write **$T_0 = 10^4$ K**, not
+  $**T_0**$).
 - Inline references to extracted figures using relative paths:
   ![](figures/{arxiv_id}/<filename>)
 - If a paper warrants no figure, simply omit the figure line. Never add
