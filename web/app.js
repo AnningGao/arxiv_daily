@@ -48,8 +48,16 @@ function protectMath(src) {
   return { text: out, store };
 }
 
+// The TeX goes back in HTML-escaped: raw, "$0.8<z<2.1$" would parse as a
+// "<z" tag that swallows the following text (and any closing </strong>,
+// turning the rest of the page bold). KaTeX reads textContent, so it still
+// sees the original "<".
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function restoreMath(html, store) {
-  return html.replace(/@@MATH(\d+)@@/g, (_, i) => store[Number(i)]);
+  return html.replace(/@@MATH(\d+)@@/g, (_, i) => escapeHtml(store[Number(i)]));
 }
 
 // ---------------------------------------------------------------------------
